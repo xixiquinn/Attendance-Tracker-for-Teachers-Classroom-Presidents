@@ -86,7 +86,7 @@ somewhere else, such as Vercel, add the same variables in that project's setting
 app.py              Flask server: logins, blocks, data, import and export
 export_xlsx.py      builds the Excel files
 import_xlsx.py      reads names and attendance from a spreadsheet
-static/             index.html (the app), login.html (the login page), manifest and app icons
+static/             index.html (the app), login.html (the login page), background pictures, manifest and app icons
 tests/test_app.py   automated tests (run: python tests/test_app.py)
 Dockerfile          for Docker hosts
 ```

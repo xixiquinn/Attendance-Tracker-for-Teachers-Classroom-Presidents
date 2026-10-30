@@ -83,7 +83,8 @@ app.config.update(
                                or os.environ.get("FORCE_HTTPS")),
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
 )
-PUBLIC = {"/login", "/api/login", "/manifest.json", "/icon-180.png", "/icon-192.png", "/icon-512.png"}
+PUBLIC = {"/login", "/api/login", "/login-bg.jpg", "/manifest.json",
+          "/icon-180.png", "/icon-192.png", "/icon-512.png"}
 
 
 def _fingerprint(name, password):
