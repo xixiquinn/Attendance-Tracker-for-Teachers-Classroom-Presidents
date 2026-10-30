@@ -88,8 +88,34 @@ A.db = DB()
 A.db.store[("users", "juan", "students", "1")] = {"name": "Old Student"}  # pre-blocks data
 A.db.store[("users", "juan", "attendance", "2026-10-01")] = {"1": "P"}
 
-c = A.app.test_client()
-H = lambda u, p: {"Authorization": "Basic " + base64.b64encode(f"{u}:{p}".encode()).decode()}
+A.time.sleep = lambda s: None  # skip the wrong-password delay in tests
+
+
+class Browser:
+    """Pretends to be separate browsers: each (user, password) gets its own cookie jar and logs in."""
+
+    def __init__(self):
+        self.anon, self.jars = A.app.test_client(), {}
+
+    def _client(self, headers):
+        if not headers:
+            return self.anon
+        key = (headers["u"], headers["p"])
+        if key not in self.jars:
+            cl = A.app.test_client()
+            ok_login = cl.post("/api/login", json={"username": key[0], "password": key[1]}).status_code == 200
+            self.jars[key] = cl if ok_login else self.anon
+        return self.jars[key]
+
+    def get(self, *a, headers=None, **k): return self._client(headers).get(*a, **k)
+    def post(self, *a, headers=None, **k): return self._client(headers).post(*a, **k)
+    def put(self, *a, headers=None, **k): return self._client(headers).put(*a, **k)
+    def patch(self, *a, headers=None, **k): return self._client(headers).patch(*a, **k)
+    def delete(self, *a, headers=None, **k): return self._client(headers).delete(*a, **k)
+
+
+c = Browser()
+H = lambda u, p: {"u": u, "p": p}
 J, M = H("juan", "pw1"), H("maria", "pw2")
 
 
@@ -173,4 +199,32 @@ for x in ["block-a", "block-b", "block-d", "block-e", "block-f"]:
     c.delete(f"/api/blocks/{x}", headers=J)
 ok("cannot delete the last block", c.delete("/api/blocks/block-z", headers=J).status_code in (400, 404)
    and len(c.get("/api/blocks", headers=J).get_json()["blocks"]) == 1)
+
+# ---- login page and sessions
+anon = A.app.test_client()
+r = anon.get("/")
+ok("app page redirects to the login page", r.status_code == 302 and r.headers["Location"].endswith("/login"))
+page = anon.get("/login")
+ok("login page is public", page.status_code == 200 and b"Log in" in page.data)
+ok("api says 401 when logged out", anon.get("/api/blocks").get_json() == {"error": "Please log in."})
+ok("wrong password rejected", anon.post("/api/login", json={"username": "juan", "password": "bad"}).status_code == 401)
+ok("unknown user rejected", anon.post("/api/login", json={"username": "zed", "password": "pw1"}).status_code == 401)
+r = anon.post("/api/login", json={"username": "JUAN", "password": "pw1"})
+ok("login works (username not case-sensitive)", r.status_code == 200 and r.get_json()["user"] == "juan")
+ok("cookie is HttpOnly + SameSite", "HttpOnly" in r.headers["Set-Cookie"] and "SameSite=Lax" in r.headers["Set-Cookie"])
+ok("logged-in browser opens the app", anon.get("/").status_code == 200)
+ok("login page sends logged-in users to the app", anon.get("/login").status_code == 302)
+anon.post("/api/logout")
+ok("logout locks the app again", anon.get("/api/blocks").status_code == 401)
+
+u = A.app.test_client()
+u.post("/api/login", json={"username": "maria", "password": "pw2"})
+ok("maria logged in", u.get("/api/blocks").status_code == 200)
+A.USERS["maria"] = "newpw"
+ok("changing a password signs that user out", u.get("/api/blocks").status_code == 401)
+A.USERS["maria"] = "pw2"
+ok("restoring it lets the old cookie work again", u.get("/api/blocks").status_code == 200)
+del A.USERS["maria"]
+ok("removing a user signs them out at once", u.get("/api/blocks").status_code == 401)
+A.USERS["maria"] = "pw2"
 print("ALL PASSED")

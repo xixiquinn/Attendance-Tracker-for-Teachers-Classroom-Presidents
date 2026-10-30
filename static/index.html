@@ -50,7 +50,7 @@ input,select{border:1px solid var(--bd);background:var(--card);border-radius:8px
 .wrap{overflow-x:auto}
 .name{min-width:0;overflow-wrap:anywhere}
 </style></head><body><div class="wm">Made by Quinn</div><main>
-<div class="top"><h1>Attendance Tracker</h1><span class="sync" id="sync"></span></div>
+<div class="top"><h1>Attendance Tracker</h1><span><span class="sync" id="sync"></span> <button id="logout" style="padding:4px 10px;font-size:.8rem;margin-left:6px">Log out</button></span></div>
 <div id="blocks"></div>
 <nav id="nav"></nav>
 <div id="view"></div>
@@ -73,7 +73,7 @@ const norm=d=>({students:Array.isArray(d&&d.students)?d.students:[],records:(d&&
 let dirty=false,who='',blocks=[],cur='';
 try{cur=localStorage.getItem('attendance-block')||''}catch(e){}
 const J={'Content-Type':'application/json'};
-const api=(p,o)=>fetch(p,o).then(async r=>{const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Request failed');return d});
+const api=(p,o)=>fetch(p,o).then(async r=>{if(r.status===401){location.href='/login';throw new Error('Please log in again.')}const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Request failed');return d});
 const byName=(a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true});
 const curName=()=>(blocks.find(b=>b.id===cur)||{}).name||'';
 let pend=null,timer=null;
@@ -87,7 +87,7 @@ function flush(){
   clearTimeout(timer);if(!pend)return;
   const p=pend;pend=null;
   fetch('/api/blocks/'+p.b+'/data',{method:'PUT',headers:J,body:p.snap,keepalive:p.snap.length<60000})
-    .then(r=>{if(!r.ok)throw 0;if(p.b===cur&&!pend){dirty=false;sync='Synced'}head()})
+    .then(r=>{if(r.status===401){location.href='/login';return}if(!r.ok)throw 0;if(p.b===cur&&!pend){dirty=false;sync='Synced'}head()})
     .catch(()=>{sync='Offline: saved on this device only';head()});
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)flush()});
@@ -189,6 +189,7 @@ async function importSheet(file){
   const fd=new FormData();fd.append('file',file);
   try{
     const r=await fetch('/api/parse-import',{method:'POST',body:fd});
+    if(r.status===401){location.href='/login';return}
     const d=await r.json();
     if(!r.ok){msg=d.error||'Import failed.';return render()}
     let ns=0,nr=0;
@@ -301,5 +302,6 @@ function render(){
   if(y&&window.scrollTo)window.scrollTo(0,y);
   const sn=$('#sname');if(sn)sn.onkeydown=e=>{if(e.key==='Enter')addStudent()};
 }
+$('#logout').onclick=async()=>{try{await fetch('/api/logout',{method:'POST'})}catch(e){}location.href='/login'};
 render();init();
 </script></body></html>

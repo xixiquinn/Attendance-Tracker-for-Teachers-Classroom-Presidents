@@ -11,7 +11,7 @@ Made by Quinn.
 
 ## Features
 
-- **Individual logins**: every person has their own username and password; nobody sees anyone else's data.
+- **Login page**: every person logs in with their own username and password and stays signed in for 30 days (Log out button at the top). Nobody sees anyone else's data.
 - **Blocks**: Block A to E to start with. Add, rename or delete blocks. Each block has its own students, attendance and activities.
 - **Students**: add one by one, search, remove, or import from a spreadsheet.
 - **Take attendance**: mark Present, Absent, Late or Excused for any date.
@@ -61,10 +61,18 @@ Open http://localhost:5000 and log in. Port 8080 can clash with other programs (
 |---|---|
 | `USERS` | Logins as `username:password` pairs separated by commas. Usernames: letters, numbers, `.`, `_`, `-`. Passwords cannot contain `,` or `:`. |
 | `FIREBASE_CREDENTIALS` | The full text of your service-account key JSON (use this on a host instead of the key file). |
+| `SECRET_KEY` | Optional. Signs the login cookie. If you leave it out, one is made from your other settings, so it works on Vercel with no extra setup. |
 | `APP_PASSWORD` | Optional single shared password, only used when `USERS` is not set. |
 | `PORT` | Port to listen on (hosts usually set this for you). |
 
 If neither `USERS` nor `APP_PASSWORD` is set, the app has no login. Only use that on your own computer.
+
+### How login works
+
+- The login page checks the username and password against `USERS` and sets a signed, HTTP-only cookie.
+- Changing someone's password in `USERS`, or removing them, signs that person out straight away.
+- Wrong passwords are slowed down, but there is no lockout. Use long passwords.
+- Adding or changing users: edit `USERS` in your host's settings and redeploy.
 
 ## Deploying
 
@@ -78,7 +86,7 @@ somewhere else, such as Vercel, add the same variables in that project's setting
 app.py              Flask server: logins, blocks, data, import and export
 export_xlsx.py      builds the Excel files
 import_xlsx.py      reads names and attendance from a spreadsheet
-static/             the web page (index.html), manifest and app icons
+static/             index.html (the app), login.html (the login page), manifest and app icons
 tests/test_app.py   automated tests (run: python tests/test_app.py)
 Dockerfile          for Docker hosts
 ```

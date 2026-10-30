@@ -6,14 +6,17 @@ Firestore layout (one private space per login):
   users/{username}/blocks/{blockId}/attendance/{date}    -> {studentId: "P" | "A" | "L" | "E"}
   users/{username}/blocks/{blockId}/activities/{id}      -> {title, date, done: [studentId, ...]}
 """
+import hashlib
 import hmac
 import json
 import os
 import re
+import time
+from datetime import timedelta
 
 import firebase_admin
 from firebase_admin import credentials, firestore
-from flask import Flask, Response, g, jsonify, request, send_file
+from flask import Flask, g, jsonify, redirect, request, send_file, session
 
 from export_xlsx import build_workbook, build_workbook_multi
 from import_xlsx import parse_spreadsheet
@@ -58,26 +61,93 @@ def load_users():
 
 USERS = load_users()
 SHARED_PASSWORD = os.environ.get("APP_PASSWORD")  # optional: one shared login
+AUTH_ON = bool(USERS or SHARED_PASSWORD)
+
+
+def _secret():
+    """Key that signs the login cookie. Set SECRET_KEY to choose your own; otherwise it is
+    derived from your settings, so it is the same on every server instance (needed on Vercel)."""
+    explicit = os.environ.get("SECRET_KEY")
+    if explicit:
+        return explicit
+    seed = "|".join(["attendance-tracker", os.environ.get("USERS", ""), SHARED_PASSWORD or "",
+                     os.environ.get("FIREBASE_CREDENTIALS", "")])
+    return hashlib.sha256(seed.encode()).hexdigest()
+
+
+app.secret_key = _secret()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=bool(os.environ.get("VERCEL") or os.environ.get("RENDER")
+                               or os.environ.get("FORCE_HTTPS")),
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
+PUBLIC = {"/login", "/api/login", "/manifest.json", "/icon-180.png", "/icon-192.png", "/icon-512.png"}
+
+
+def _fingerprint(name, password):
+    """Ties a login cookie to the current password: change it or remove the user and the cookie stops working."""
+    return hmac.new(app.secret_key.encode(), f"{name}:{password}".encode(), hashlib.sha256).hexdigest()[:20]
+
+
+def current_user():
+    if not AUTH_ON:
+        return "local"  # no login configured (local testing only)
+    name, fp = session.get("u"), session.get("k")
+    if not name or not fp:
+        return None
+    password = USERS.get(name) if USERS else (SHARED_PASSWORD if name == "shared" else None)
+    if password and hmac.compare_digest(str(fp), _fingerprint(name, password)):
+        return name
+    return None
 
 
 @app.before_request
 def require_login():
-    if not USERS and not SHARED_PASSWORD:
-        g.user = "local"  # no login configured
+    g.user = current_user()
+    if g.user or request.path in PUBLIC:
         return None
-    auth = request.authorization
-    if auth and auth.username:
-        name, pw = auth.username.strip().lower(), auth.password or ""
-        if USERS:
-            expected = USERS.get(name)
-            if expected and hmac.compare_digest(expected.encode(), pw.encode()):
-                g.user = name
-                return None
-        elif hmac.compare_digest(SHARED_PASSWORD.encode(), pw.encode()):
-            g.user = "shared"
-            return None
-    return Response("Login required", 401,
-                    {"WWW-Authenticate": 'Basic realm="Attendance Tracker"'})
+    if request.path.startswith("/api/"):
+        return jsonify(error="Please log in."), 401
+    return redirect("/login")
+
+
+@app.get("/login")
+def login_page():
+    if g.user:
+        return redirect("/")
+    return app.send_static_file("login.html")
+
+
+@app.post("/api/login")
+def login():
+    if not AUTH_ON:
+        return jsonify(ok=True, user="local")
+    body = request.get_json(silent=True) or {}
+    name = str(body.get("username", "")).strip().lower()
+    password = str(body.get("password", ""))
+    user = None
+    if USERS:
+        expected = USERS.get(name)
+        if expected and hmac.compare_digest(expected.encode(), password.encode()):
+            user = name
+    elif hmac.compare_digest(SHARED_PASSWORD.encode(), password.encode()):
+        user = "shared"
+    if not user:
+        time.sleep(0.6)  # slows down password guessing
+        return jsonify(error="Wrong username or password."), 401
+    session.clear()
+    session.permanent = True
+    session["u"] = user
+    session["k"] = _fingerprint(user, USERS[user] if USERS else SHARED_PASSWORD)
+    return jsonify(ok=True, user=user)
+
+
+@app.post("/api/logout")
+def logout():
+    session.clear()
+    return jsonify(ok=True)
 
 
 def user_doc():
