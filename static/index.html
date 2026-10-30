@@ -15,7 +15,8 @@
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-main{max-width:720px;margin:0 auto;padding:16px}
+main{max-width:720px;margin:0 auto;padding:30px 16px 16px}
+.wm{position:fixed;top:env(safe-area-inset-top,0px);left:0;padding:5px 10px;font-size:.75rem;font-weight:600;color:var(--mut);opacity:.8;letter-spacing:.02em;pointer-events:none;user-select:none;z-index:5}
 h1{font-size:1.3rem;margin:0}
 .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
 .sync{font-size:.8rem;color:var(--mut)}
@@ -39,6 +40,8 @@ input,select{border:1px solid var(--bd);background:var(--card);border-radius:8px
 .seg button.sA.on{background:var(--A);border-color:var(--A)}
 .seg button.sL.on{background:var(--L);border-color:var(--L)}
 .seg button.sE.on{background:var(--E);border-color:var(--E)}
+.dn{min-width:86px}.dn.on{background:var(--P);border-color:var(--P);color:#fff}
+.bar{height:8px;background:var(--bd);border-radius:4px;margin-top:8px}.bar>i{display:block;height:8px;background:var(--P);border-radius:4px}
 .tag{font-weight:600}.tP{color:var(--P)}.tA{color:var(--A)}.tL{color:var(--L)}.tE{color:var(--E)}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;text-align:center;margin:12px 0}
 .stats div{border:1px solid var(--bd);border-radius:10px;padding:8px}
@@ -46,7 +49,7 @@ input,select{border:1px solid var(--bd);background:var(--card);border-radius:8px
 .big{font-size:2rem;font-weight:700}
 .wrap{overflow-x:auto}
 .name{min-width:0;overflow-wrap:anywhere}
-</style></head><body><main>
+</style></head><body><div class="wm">Made by Quinn</div><main>
 <div class="top"><h1>Attendance Tracker</h1><span class="sync" id="sync"></span></div>
 <div id="blocks"></div>
 <nav id="nav"></nav>
@@ -54,7 +57,7 @@ input,select{border:1px solid var(--bd);background:var(--card);border-radius:8px
 </main>
 <script>
 const KEY='attendance-tracker-v1';
-let S={students:[],records:{}},ref=null,tab='students',q='',msg='',
+let S={students:[],records:{},activities:[]},actId='',ref=null,tab='students',q='',msg='',
     date=todayStr(),picked=false,draft={},sumId='',sync='Saved on this device';
 const $=s=>document.querySelector(s);
 function todayStr(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}
@@ -65,7 +68,7 @@ function refreshDate(){
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshDate()});
 const esc=t=>String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const norm=d=>({students:Array.isArray(d&&d.students)?d.students:[],records:(d&&d.records)||{}});
+const norm=d=>({students:Array.isArray(d&&d.students)?d.students:[],records:(d&&d.records)||{},activities:Array.isArray(d&&d.activities)?d.activities:[]});
 
 let dirty=false,who='',blocks=[],cur='';
 try{cur=localStorage.getItem('attendance-block')||''}catch(e){}
@@ -73,14 +76,21 @@ const J={'Content-Type':'application/json'};
 const api=(p,o)=>fetch(p,o).then(async r=>{const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Request failed');return d});
 const byName=(a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true});
 const curName=()=>(blocks.find(b=>b.id===cur)||{}).name||'';
+let pend=null,timer=null;
 function persist(){
-  const b=cur,snap=JSON.stringify(S);
-  try{localStorage.setItem(KEY+':'+b,snap)}catch(e){}
+  const snap=JSON.stringify(S);
+  try{localStorage.setItem(KEY+':'+cur,snap)}catch(e){}
   dirty=true;sync='Saving…';head();
-  fetch('/api/blocks/'+b+'/data',{method:'PUT',headers:J,body:snap})
-    .then(r=>{if(!r.ok)throw 0;if(b===cur){dirty=false;sync='Synced'}head()})
+  pend={b:cur,snap};clearTimeout(timer);timer=setTimeout(flush,700);
+}
+function flush(){
+  clearTimeout(timer);if(!pend)return;
+  const p=pend;pend=null;
+  fetch('/api/blocks/'+p.b+'/data',{method:'PUT',headers:J,body:p.snap,keepalive:p.snap.length<60000})
+    .then(r=>{if(!r.ok)throw 0;if(p.b===cur&&!pend){dirty=false;sync='Synced'}head()})
     .catch(()=>{sync='Offline: saved on this device only';head()});
 }
+document.addEventListener('visibilitychange',()=>{if(document.hidden)flush()});
 async function init(){
   try{
     const d=await api('/api/blocks');who=d.user||'';blocks=d.blocks;
@@ -105,7 +115,7 @@ async function pull(first){
   head();if(tab!=='attendance')render();
 }
 async function setBlock(id){
-  cur=id;dirty=false;S={students:[],records:{}};draft={};q='';sumId='';msg='';
+  flush();cur=id;dirty=false;S={students:[],records:{},activities:[]};actId='';draft={};q='';sumId='';msg='';
   try{localStorage.setItem('attendance-block',cur)}catch(e){}
   render();await pull(true);
 }
@@ -139,7 +149,7 @@ const stat=(d,id)=>(S.records[d]||{})[id];
 function head(){
   renderBlocks();
   $('#sync').textContent=(who?who+' · ':'')+sync;
-  const T=[['students','Students'],['attendance','Take'],['daily','Daily'],['summary','Summary']];
+  const T=[['students','Students'],['attendance','Take'],['daily','Daily'],['summary','Summary'],['activities','Activities']];
   $('#nav').innerHTML=T.map(t=>`<button class="${tab===t[0]?'on':''}" data-t="${t[0]}">${t[1]}</button>`).join('');
   $('#nav').querySelectorAll('button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;msg='';if(tab==='attendance')draft={...(S.records[date]||{})};render()});
 }
@@ -153,6 +163,7 @@ function delStudent(id){
   const s=S.students[sidx(id)];
   if(!s||!confirm(`Remove ${s.name} and all their attendance records?`))return;
   S.students.splice(sidx(id),1);
+  S.activities.forEach(a=>{a.done=a.done.filter(x=>x!==id)});
   for(const d in S.records){delete S.records[d][id];if(!Object.keys(S.records[d]).length)delete S.records[d]}
   persist();render();
 }
@@ -209,6 +220,46 @@ function vDaily(){
   <div class="card wrap"><table style="width:100%;border-collapse:collapse"><tr class="mut" style="text-align:left"><th>ID</th><th>Name</th><th>Status</th></tr>
   ${S.students.map(s=>{const k=stat(date,s.id);return `<tr style="border-top:1px solid var(--bd)"><td style="padding:8px 0">${esc(s.id)}</td><td>${esc(s.name)}</td><td class="tag t${k||''}">${k||'–'}</td></tr>`}).join('')||'<tr><td class="mut" colspan="3">No students registered.</td></tr>'}</table></div>`;
 }
+const newId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const actList=()=>S.activities.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')||a.title.localeCompare(b.title));
+const curAct=()=>S.activities.find(a=>a.id===actId);
+function addActivity(){
+  const title=$('#atitle').value.trim(),d=$('#adate').value;
+  if(!title){msg='Enter an activity name.';return render()}
+  const a={id:newId(),title,date:d||'',done:[]};
+  S.activities.push(a);actId=a.id;persist();msg='';render();
+}
+function toggleDone(sid){
+  const a=curAct();if(!a)return;
+  a.done=a.done.includes(sid)?a.done.filter(x=>x!==sid):a.done.concat(sid);
+  persist();render();
+}
+function setAllDone(on){const a=curAct();if(!a)return;a.done=on?S.students.map(s=>s.id):[];persist();render()}
+function renameAct(){
+  const a=curAct();if(!a)return;
+  const t=(prompt('Activity name',a.title)||'').trim();if(!t)return;
+  a.title=t;persist();render();
+}
+function deleteAct(){
+  const a=curAct();if(!a||!confirm('Delete "'+a.title+'"?'))return;
+  S.activities=S.activities.filter(x=>x.id!==a.id);actId='';persist();render();
+}
+function vActivities(){
+  const total=S.students.length,a=curAct();
+  if(!total)return '<div class="card mut">Add students first (Students tab), then track their activities here.</div>';
+  if(a){
+    const ids=new Set(S.students.map(s=>s.id)),n=a.done.filter(x=>ids.has(x)).length,pct=Math.round(n/total*100);
+    return `<div class="card"><div class="row"><button id="aback">&larr; All activities</button><button id="aren">Rename</button><button class="del" id="adel">Delete</button></div>
+    <div style="font-size:1.15rem;font-weight:600;margin-top:12px;overflow-wrap:anywhere">${esc(a.title)}</div>
+    <div class="mut">${a.date?esc(a.date):'No date'} &middot; ${n} of ${total} done (${pct}%)</div>
+    <div class="bar"><i style="width:${pct}%"></i></div>
+    <div class="row" style="margin-top:12px"><button id="aall">Mark all done</button><button id="aclr">Clear all</button></div></div>
+    <div class="card list">${S.students.map(s=>{const d=a.done.includes(s.id);return `<div><span class="name"><b>${esc(s.id)}</b> ${esc(s.name)}</span><button class="dn ${d?'on':''}" data-sid="${esc(s.id)}">${d?'Done':'Not yet'}</button></div>`}).join('')}</div>`;
+  }
+  const L=actList();
+  return `<div class="card"><div class="row"><input id="atitle" placeholder="Activity name (example: Quiz 1)"><input type="date" id="adate" value="${date}" style="flex:0 0 150px"><button class="pri" id="aadd">Add</button></div></div>
+  <div class="card list">${L.map(x=>{const n=x.done.length;return `<div><span class="name"><b>${esc(x.title)}</b><br><span class="mut">${x.date?esc(x.date)+' &middot; ':''}${n} of ${total} done</span></span><button data-a="${esc(x.id)}">Open</button></div>`}).join('')||'<p class="mut">No activities yet. Add one above.</p>'}</div>`;
+}
 function vSummary(){
   const opts=`<option value="">Select a student…</option>`+S.students.map(s=>`<option value="${esc(s.id)}" ${s.id===sumId?'selected':''}>${esc(s.id)} – ${esc(s.name)}</option>`).join('');
   let out='';
@@ -224,11 +275,17 @@ function vSummary(){
   return `<div class="card"><select id="sum">${opts}</select></div>${out}`;
 }
 function render(){
+  const y=window.scrollY||0;
   head();
-  const v=tab==='students'?vStudents():tab==='attendance'?vTake():tab==='daily'?vDaily():vSummary();
+  const v=tab==='students'?vStudents():tab==='attendance'?vTake():tab==='daily'?vDaily():tab==='activities'?vActivities():vSummary();
   $('#view').innerHTML=(msg?`<p class="card" style="padding:10px 14px">${esc(msg)}</p>`:'')+v;
   const V=$('#view'),on=(s,f)=>{const e=V.querySelector(s);if(e)e.onclick=f};
   on('#add',addStudent);on('#save',saveAttendance);
+  on('#aadd',addActivity);on('#aback',()=>{actId='';render()});on('#aren',renameAct);on('#adel',deleteAct);
+  on('#aall',()=>setAllDone(true));on('#aclr',()=>setAllDone(false));
+  V.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{actId=b.dataset.a;render()});
+  V.querySelectorAll('[data-sid]').forEach(b=>b.onclick=()=>toggleDone(b.dataset.sid));
+  const at=$('#atitle');if(at)at.onkeydown=e=>{if(e.key==='Enter')addActivity()};
   on('#imp',()=>$('#file').click());
   on('#impx',()=>$('#filex').click());
   const fx=$('#filex');if(fx)fx.onchange=()=>{if(fx.files[0])importSheet(fx.files[0])};
@@ -241,6 +298,7 @@ function render(){
   const qi=$('#q');if(qi)qi.oninput=()=>{q=qi.value;const p=qi.selectionStart;render();const n=$('#q');n.focus();n.setSelectionRange(p,p)};
   const di=$('#date');if(di)di.onchange=()=>{if(di.value){picked=true;date=di.value;draft={...(S.records[date]||{})};msg='';render()}};
   const su=$('#sum');if(su)su.onchange=()=>{sumId=su.value;render()};
+  if(y&&window.scrollTo)window.scrollTo(0,y);
   const sn=$('#sname');if(sn)sn.onkeydown=e=>{if(e.key==='Enter')addStudent()};
 }
 render();init();

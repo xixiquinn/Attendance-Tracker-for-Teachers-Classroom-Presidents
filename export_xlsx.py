@@ -55,6 +55,52 @@ def _fill(ws, students, records):
     ws.freeze_panes = "C2"
 
 
+def _fill_activities(ws, students, activities):
+    acts = sorted(activities, key=lambda a: (a.get("date") or "9999-99-99", a["title"].lower()))
+    fc = 5  # A=ID, B=Name, C=Done, D=Progress, E onward = one column per activity
+    ws.append(["ID", "Name", "Done", "Progress"]
+              + [f'{a["title"]}\n{a.get("date") or "no date"}' for a in acts])
+    for c in ws[1]:
+        c.font = Font(name=FONT, bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="2F6FED")
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.row_dimensions[1].height = 45
+
+    first = get_column_letter(fc)
+    last = get_column_letter(max(fc, fc + len(acts) - 1))
+    done_sets = [set(a.get("done", [])) for a in acts]
+    for r, s in enumerate(students, start=2):
+        hdr = f"${first}$1:${last}$1"
+        ws.append([s["id"], s["name"], f'=COUNTIF(${first}{r}:${last}{r},"Done")',
+                   f"=IF(COUNTA({hdr})=0,0,C{r}/COUNTA({hdr}))"]
+                  + ["Done" if s["id"] in ds else "" for ds in done_sets])
+        ws.cell(r, 4).number_format = "0.00%"
+        for c in range(1, 5 + len(acts)):
+            cell = ws.cell(r, c)
+            cell.font = Font(name=FONT)
+            if c >= fc:
+                cell.alignment = Alignment(horizontal="center")
+                if cell.value == "Done":
+                    cell.fill = PatternFill("solid", fgColor=FILLS["P"])
+
+    n = len(students) + 1
+    if students and acts:
+        ws.cell(n + 2, 2, "Students done per activity").font = Font(name=FONT, bold=True)
+        for i in range(len(acts)):
+            col = get_column_letter(fc + i)
+            cell = ws.cell(n + 2, fc + i, f'=COUNTIF({col}2:{col}{n},"Done")')
+            cell.font = Font(name=FONT, bold=True)
+            cell.alignment = Alignment(horizontal="center")
+
+    ws.column_dimensions["A"].width = 8
+    ws.column_dimensions["B"].width = 38
+    ws.column_dimensions["C"].width = 9
+    ws.column_dimensions["D"].width = 11
+    for i in range(len(acts)):
+        ws.column_dimensions[get_column_letter(fc + i)].width = 18
+    ws.freeze_panes = "C2"
+
+
 def _title(name, used):
     base = (re.sub(r"[\[\]:*?/\\]", "", name).strip() or "Sheet")[:28]
     t, n = base, 2
@@ -65,12 +111,20 @@ def _title(name, used):
 
 
 def build_workbook_multi(items):
-    """items: [(sheet name, students, records), ...] -> BytesIO with one sheet each."""
+    """items: [(sheet name, students, records[, activities]), ...] -> BytesIO.
+
+    Each block gets an attendance sheet; blocks that have activities also get an
+    "<name> Activities" sheet right after it.
+    """
     wb = Workbook()
     wb.remove(wb.active)
     used = set()
-    for name, students, records in items:
+    for item in items:
+        name, students, records = item[0], item[1], item[2]
+        activities = item[3] if len(item) > 3 else []
         _fill(wb.create_sheet(_title(name, used)), students, records)
+        if activities:
+            _fill_activities(wb.create_sheet(_title(f"{name[:17]} Activities", used)), students, activities)
     if not wb.sheetnames:
         wb.create_sheet("Attendance")
     buf = io.BytesIO()
@@ -79,5 +133,5 @@ def build_workbook_multi(items):
     return buf
 
 
-def build_workbook(students, records, name="Attendance"):
-    return build_workbook_multi([(name, students, records)])
+def build_workbook(students, records, name="Attendance", activities=None):
+    return build_workbook_multi([(name, students, records, activities or [])])

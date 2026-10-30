@@ -4,6 +4,7 @@ Firestore layout (one private space per login):
   users/{username}/blocks/{blockId}                      -> {name}
   users/{username}/blocks/{blockId}/students/{id}        -> {name}
   users/{username}/blocks/{blockId}/attendance/{date}    -> {studentId: "P" | "A" | "L" | "E"}
+  users/{username}/blocks/{blockId}/activities/{id}      -> {title, date, done: [studentId, ...]}
 """
 import hmac
 import json
@@ -37,6 +38,7 @@ db = init_db()
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 NAME_RE = re.compile(r"^[a-z0-9_.-]{1,40}$")
 BID_RE = re.compile(r"^[a-z0-9-]{1,50}$")
+AID_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MAX_BLOCKS = 30
 
@@ -97,10 +99,10 @@ def commit_ops(ops):
 
 
 def replace_collection(ref, new_docs):
-    """Make the collection exactly equal to new_docs ({doc_id: data})."""
-    old = {d.id: d for d in ref.list_documents()}
-    ops = [("set", ref.document(k), v) for k, v in new_docs.items()]
-    ops += [("delete", old[k], None) for k in old.keys() - new_docs.keys()]
+    """Make the collection equal to new_docs ({doc_id: data}); only changed docs are written."""
+    old = {d.id: d.to_dict() for d in ref.stream()}
+    ops = [("set", ref.document(k), v) for k, v in new_docs.items() if old.get(k) != v]
+    ops += [("delete", ref.document(k), None) for k in old.keys() - new_docs.keys()]
     commit_ops(ops)
 
 
@@ -154,7 +156,34 @@ def load_block(ref):
                 for d in ref.collection("students").stream()]
     students.sort(key=sort_key)
     records = {d.id: d.to_dict() for d in ref.collection("attendance").stream()}
-    return students, records
+    activities = []
+    for d in ref.collection("activities").stream():
+        x = d.to_dict()
+        activities.append({"id": d.id, "title": x.get("title", ""), "date": x.get("date", ""),
+                           "done": list(x.get("done", []))})
+    activities.sort(key=lambda a: (a["date"] or "9999-99-99", a["title"].lower()))
+    return students, records, activities
+
+
+def clean_activities(raw, student_ids):
+    """Validate the activity list; returns {id: doc} or None when the client sent none."""
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or len(raw) > 300:
+        raise ValueError("bad activities")
+    out = {}
+    for a in raw:
+        if not isinstance(a, dict):
+            raise ValueError("bad activity")
+        aid = str(a.get("id", "")).strip()
+        title = str(a.get("title", "")).strip()[:80]
+        date = str(a.get("date") or "")
+        if not AID_RE.match(aid) or not title or (date and not DATE_RE.match(date)):
+            raise ValueError(f"invalid activity: {title!r}")
+        done = a.get("done") if isinstance(a.get("done"), list) else []
+        out[aid] = {"title": title, "date": date,
+                    "done": sorted({str(x) for x in done if str(x) in student_ids})}
+    return out
 
 
 def not_found():
@@ -209,7 +238,7 @@ def delete_block(bid):
     if len(list_blocks()) <= 1:
         return jsonify(error="You must keep at least one block."), 400
     ops = []
-    for coll in ("students", "attendance"):
+    for coll in ("students", "attendance", "activities"):
         ops += [("delete", d, None) for d in ref.collection(coll).list_documents()]
     ops.append(("delete", ref, None))
     commit_ops(ops)
@@ -222,8 +251,8 @@ def get_data(bid):
     ref = block_ref(bid)
     if not ref:
         return not_found()
-    students, records = load_block(ref)
-    return jsonify(students=students, records=records)
+    students, records, activities = load_block(ref)
+    return jsonify(students=students, records=records, activities=activities)
 
 
 @app.put("/api/blocks/<bid>/data")
@@ -251,8 +280,15 @@ def put_data(bid):
         if clean:
             record_docs[day] = clean
 
+    try:
+        activity_docs = clean_activities(body.get("activities"), set(student_docs))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+
     replace_collection(ref.collection("students"), student_docs)
     replace_collection(ref.collection("attendance"), record_docs)
+    if activity_docs is not None:  # older pages that don't send activities leave them alone
+        replace_collection(ref.collection("activities"), activity_docs)
     return jsonify(ok=True)
 
 
@@ -262,9 +298,9 @@ def export_block(bid):
     ref = block_ref(bid)
     if not ref:
         return not_found()
-    students, records = load_block(ref)
+    students, records, activities = load_block(ref)
     name = ref.get().to_dict().get("name", bid)
-    return send_file(build_workbook(students, records, name), as_attachment=True,
+    return send_file(build_workbook(students, records, name, activities), as_attachment=True,
                      download_name=f"attendance-{bid}.xlsx", mimetype=XLSX)
 
 
@@ -272,8 +308,8 @@ def export_block(bid):
 def export_all():
     items = []
     for b in list_blocks():
-        students, records = load_block(blocks_ref().document(b["id"]))
-        items.append((b["name"], students, records))
+        students, records, activities = load_block(blocks_ref().document(b["id"]))
+        items.append((b["name"], students, records, activities))
     return send_file(build_workbook_multi(items), as_attachment=True,
                      download_name="attendance-all-blocks.xlsx", mimetype=XLSX)
 
